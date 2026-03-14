@@ -1,30 +1,26 @@
-'use strict';
-
-const fs = require('graceful-fs');
-const mkdirp = require('mkdirp');
-const sleep = require('thread-sleep');
-const rimraf = require('rimraf');
-const execa = require('execa');
-const pDefer = require('p-defer');
-const pDelay = require('delay');
+import fs from 'graceful-fs';
+import execa from 'execa';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const clearTimeouts = require('@segment/clear-timeouts');
-const lockfile = require('../');
-const unlockAll = require('./util/unlockAll');
+import lockfile from '../src/index';
+import unlockAll from './util/unlockAll';
+import { delay, pDefer, sleepSync } from './util/helpers';
 
 const tmpDir = `${__dirname}/tmp`;
 
 clearTimeouts.install();
 
-beforeAll(() => mkdirp.sync(tmpDir));
+beforeAll(() => fs.mkdirSync(tmpDir, { recursive: true }));
 
-afterAll(() => rimraf.sync(tmpDir));
+afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 afterEach(async () => {
     jest.restoreAllMocks();
     clearTimeouts();
 
     await unlockAll();
-    rimraf.sync(`${tmpDir}/*`);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
 });
 
 it('should be the default export', () => {
@@ -35,22 +31,22 @@ it('should fail if the file does not exist by default', async () => {
     expect.assertions(1);
 
     try {
-        await lockfile.lock(`${tmpDir}/some-file-that-will-never-exist`);
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/some-file-that-will-never-exist`, { lockfilePath: `${tmpDir}/some-file-that-will-never-exist.lock` });
+    } catch (err: any) {
         expect(err.code).toBe('ENOENT');
     }
 });
 
 it('should not fail if the file does not exist and realpath is false', async () => {
-    await lockfile.lock(`${tmpDir}/some-file-that-will-never-exist`, { realpath: false });
+    await lockfile.lock(`${tmpDir}/some-file-that-will-never-exist`, { realpath: false, lockfilePath: `${tmpDir}/some-file-that-will-never-exist.lock` });
 });
 
 it('should fail if impossible to create the lockfile because directory does not exist', async () => {
     expect.assertions(1);
 
     try {
-        await lockfile.lock(`${tmpDir}/some-dir-that-will-never-exist/foo`);
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/some-dir-that-will-never-exist/foo`, { realpath: false, lockfilePath: `${tmpDir}/some-dir-that-will-never-exist/foo.lock` });
+    } catch (err: any) {
         expect(err.code).toBe('ENOENT');
     }
 });
@@ -58,7 +54,7 @@ it('should fail if impossible to create the lockfile because directory does not 
 it('should return a promise for a release function', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 
-    const promise = lockfile.lock(`${tmpDir}/foo`);
+    const promise = lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
 
     expect(typeof promise.then).toBe('function');
 
@@ -70,9 +66,9 @@ it('should return a promise for a release function', async () => {
 it('should create the lockfile', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 
-    await lockfile.lock(`${tmpDir}/foo`);
+    await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
 
-    expect(fs.existsSync(`${tmpDir}/foo`)).toBe(true);
+    expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(true);
 });
 
 it('should create the lockfile inside a folder', async () => {
@@ -88,11 +84,11 @@ it('should fail if already locked', async () => {
 
     expect.assertions(1);
 
-    await lockfile.lock(`${tmpDir}/foo`);
+    await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
 
     try {
-        await lockfile.lock(`${tmpDir}/foo`);
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+    } catch (err: any) {
         expect(err.code).toBe('ELOCKED');
     }
 });
@@ -102,14 +98,14 @@ it('should fail if mkdir fails for an unknown reason', async () => {
 
     const customFs = {
         ...fs,
-        mkdir: (path, callback) => callback(new Error('foo')),
+        mkdir: (path: any, callback: any) => callback(new Error('foo')),
     };
 
     expect.assertions(1);
 
     try {
-        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs });
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs as any, lockfilePath: `${tmpDir}/foo.lock` });
+    } catch (err: any) {
         expect(err.message).toBe('foo');
     }
 });
@@ -117,24 +113,24 @@ it('should fail if mkdir fails for an unknown reason', async () => {
 it('should retry several times if retries were specified', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 
-    const release = await lockfile.lock(`${tmpDir}/foo`);
+    const release = await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
 
     setTimeout(release, 4000);
 
-    await lockfile.lock(`${tmpDir}/foo`, { retries: { retries: 5, maxTimeout: 1000 } });
+    await lockfile.lock(`${tmpDir}/foo`, { retries: { retries: 5, maxTimeout: 1000 }, lockfilePath: `${tmpDir}/foo.lock` });
 });
 
 it('should use a custom fs', async () => {
     const customFs = {
         ...fs,
-        realpath: (path, callback) => callback(new Error('foo')),
+        realpath: (path: any, callback: any) => callback(new Error('foo')),
     };
 
     expect.assertions(1);
 
     try {
-        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs });
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs as any, lockfilePath: `${tmpDir}/foo.lock` });
+    } catch (err: any) {
         expect(err.message).toBe('foo');
     }
 });
@@ -145,17 +141,17 @@ it('should resolve symlinks by default', async () => {
 
     expect.assertions(2);
 
-    await lockfile.lock(`${tmpDir}/bar`);
+    await lockfile.lock(`${tmpDir}/bar`, { lockfilePath: `${tmpDir}/bar.lock` });
 
     try {
-        await lockfile.lock(`${tmpDir}/bar`);
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/bar`, { lockfilePath: `${tmpDir}/bar.lock` });
+    } catch (err: any) {
         expect(err.code).toBe('ELOCKED');
     }
 
     try {
-        await lockfile.lock(`${tmpDir}/foo`);
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/bar.lock` });
+    } catch (err: any) {
         expect(err.code).toBe('ELOCKED');
     }
 });
@@ -164,8 +160,8 @@ it('should not resolve symlinks if realpath is false', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
     fs.symlinkSync(`${tmpDir}/foo`, `${tmpDir}/bar`);
 
-    await lockfile.lock(`${tmpDir}/bar`, { realpath: false });
-    await lockfile.lock(`${tmpDir}/foo`, { realpath: false });
+    await lockfile.lock(`${tmpDir}/bar`, { realpath: false, lockfilePath: `${tmpDir}/bar.lock` });
+    await lockfile.lock(`${tmpDir}/foo`, { realpath: false, lockfilePath: `${tmpDir}/foo.lock` });
 
     expect(fs.existsSync(`${tmpDir}/bar.lock`)).toBe(true);
     expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(true);
@@ -178,7 +174,7 @@ it('should remove and acquire over stale locks', async () => {
     fs.mkdirSync(`${tmpDir}/foo.lock`);
     fs.utimesSync(`${tmpDir}/foo.lock`, mtime, mtime);
 
-    await lockfile.lock(`${tmpDir}/foo`);
+    await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
 
     expect(fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime()).toBeGreaterThan(Date.now() - 3000);
 });
@@ -188,12 +184,12 @@ it('should retry if the lockfile was removed when verifying staleness', async ()
     let count = 0;
     const customFs = {
         ...fs,
-        mkdir: jest.fn((...args) => fs.mkdir(...args)),
-        stat: jest.fn((...args) => {
+        mkdir: jest.fn((...args: any[]) => (fs.mkdir as any)(...args)),
+        stat: jest.fn((...args: any[]) => {
             if (count % 2 === 0) {
-                rimraf.sync(`${tmpDir}/foo.lock`);
+                fs.rmSync(`${tmpDir}/foo.lock`, { recursive: true, force: true });
             }
-            fs.stat(...args);
+            (fs.stat as any)(...args);
             count += 1;
         }),
     };
@@ -202,7 +198,7 @@ it('should retry if the lockfile was removed when verifying staleness', async ()
     fs.mkdirSync(`${tmpDir}/foo.lock`);
     fs.utimesSync(`${tmpDir}/foo.lock`, mtime, mtime);
 
-    await lockfile.lock(`${tmpDir}/foo`, { fs: customFs });
+    await lockfile.lock(`${tmpDir}/foo`, { fs: customFs as any, lockfilePath: `${tmpDir}/foo.lock` });
 
     expect(customFs.mkdir).toHaveBeenCalledTimes(2);
     expect(customFs.stat).toHaveBeenCalledTimes(2);
@@ -213,8 +209,8 @@ it('should retry if the lockfile was removed when verifying staleness (not recur
     const mtime = new Date(Date.now() - 60000);
     const customFs = {
         ...fs,
-        mkdir: jest.fn((...args) => fs.mkdir(...args)),
-        stat: jest.fn((path, callback) => callback(Object.assign(new Error(), { code: 'ENOENT' }))),
+        mkdir: jest.fn((...args: any[]) => (fs.mkdir as any)(...args)),
+        stat: jest.fn((path: any, callback: any) => callback(Object.assign(new Error(), { code: 'ENOENT' }))),
     };
 
     fs.writeFileSync(`${tmpDir}/foo`, '');
@@ -224,8 +220,8 @@ it('should retry if the lockfile was removed when verifying staleness (not recur
     expect.assertions(3);
 
     try {
-        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs });
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs as any, lockfilePath: `${tmpDir}/foo.lock` });
+    } catch (err: any) {
         expect(err.code).toBe('ELOCKED');
         expect(customFs.mkdir).toHaveBeenCalledTimes(2);
         expect(customFs.stat).toHaveBeenCalledTimes(1);
@@ -236,7 +232,7 @@ it('should fail if stating the lockfile errors out when verifying staleness', as
     const mtime = new Date(Date.now() - 60000);
     const customFs = {
         ...fs,
-        stat: (path, callback) => callback(new Error('foo')),
+        stat: (path: any, callback: any) => callback(new Error('foo')),
     };
 
     fs.writeFileSync(`${tmpDir}/foo`, '');
@@ -246,8 +242,8 @@ it('should fail if stating the lockfile errors out when verifying staleness', as
     expect.assertions(1);
 
     try {
-        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs });
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs as any, lockfilePath: `${tmpDir}/foo.lock` });
+    } catch (err: any) {
         expect(err.message).toBe('foo');
     }
 });
@@ -256,11 +252,7 @@ it('should fail if removing a stale lockfile errors out', async () => {
     const mtime = new Date(Date.now() - 60000);
     const customFs = {
         ...fs,
-        rmdir: (path, callback) => callback(new Error('foo')),
-    };
-
-    customFs.rmdir = (path, callback) => {
-        callback(new Error('foo'));
+        rmdir: (path: any, callback: any) => callback(new Error('foo')),
     };
 
     fs.writeFileSync(`${tmpDir}/foo`, '');
@@ -270,8 +262,8 @@ it('should fail if removing a stale lockfile errors out', async () => {
     expect.assertions(1);
 
     try {
-        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs });
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs as any, lockfilePath: `${tmpDir}/foo.lock` });
+    } catch (err: any) {
         expect(err.message).toBe('foo');
     }
 });
@@ -279,14 +271,14 @@ it('should fail if removing a stale lockfile errors out', async () => {
 it('should update the lockfile mtime automatically', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 
-    await lockfile.lock(`${tmpDir}/foo`, { update: 1500 });
+    await lockfile.lock(`${tmpDir}/foo`, { update: 1500, lockfilePath: `${tmpDir}/foo.lock` });
 
     expect.assertions(2);
 
     let mtime = fs.statSync(`${tmpDir}/foo.lock`).mtime;
 
     // First update occurs at 1500ms
-    await pDelay(2000);
+    await delay(2000);
 
     let stat = fs.statSync(`${tmpDir}/foo.lock`);
 
@@ -294,7 +286,7 @@ it('should update the lockfile mtime automatically', async () => {
     mtime = stat.mtime;
 
     // Second update occurs at 3000ms
-    await pDelay(2000);
+    await delay(2000);
 
     stat = fs.statSync(`${tmpDir}/foo.lock`);
 
@@ -307,17 +299,17 @@ it('should set stale to a minimum of 2000', async () => {
 
     expect.assertions(1);
 
-    await pDelay(200);
+    await delay(200);
 
     try {
-        await lockfile.lock(`${tmpDir}/foo`, { stale: 100 });
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/foo`, { stale: 100, lockfilePath: `${tmpDir}/foo.lock` });
+    } catch (err: any) {
         expect(err.code).toBe('ELOCKED');
     }
 
-    await pDelay(2000);
+    await delay(2000);
 
-    await lockfile.lock(`${tmpDir}/foo`, { stale: 100 });
+    await lockfile.lock(`${tmpDir}/foo`, { stale: 100, lockfilePath: `${tmpDir}/foo.lock` });
 });
 
 it('should set stale to a minimum of 2000 (falsy)', async () => {
@@ -326,17 +318,17 @@ it('should set stale to a minimum of 2000 (falsy)', async () => {
 
     expect.assertions(1);
 
-    await pDelay(200);
+    await delay(200);
 
     try {
-        await lockfile.lock(`${tmpDir}/foo`, { stale: false });
-    } catch (err) {
+        await lockfile.lock(`${tmpDir}/foo`, { stale: false, lockfilePath: `${tmpDir}/foo.lock` });
+    } catch (err: any) {
         expect(err.code).toBe('ELOCKED');
     }
 
-    await pDelay(2000);
+    await delay(2000);
 
-    await lockfile.lock(`${tmpDir}/foo`, { stale: false });
+    await lockfile.lock(`${tmpDir}/foo`, { stale: false, lockfilePath: `${tmpDir}/foo.lock` });
 });
 
 it('should call the compromised function if ENOENT was detected when updating the lockfile mtime', async () => {
@@ -344,19 +336,19 @@ it('should call the compromised function if ENOENT was detected when updating th
 
     const deferred = pDefer();
 
-    const handleCompromised = async (err) => {
+    const handleCompromised = async (err: any) => {
         expect(err.code).toBe('ECOMPROMISED');
         expect(err.message).toMatch('ENOENT');
 
-        await lockfile.lock(`${tmpDir}/foo`);
+        await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
 
         deferred.resolve();
     };
 
-    await lockfile.lock(`${tmpDir}/foo`, { update: 1000, onCompromised: handleCompromised });
+    await lockfile.lock(`${tmpDir}/foo`, { update: 1000, onCompromised: handleCompromised, lockfilePath: `${tmpDir}/foo.lock` });
 
     // Remove the file to trigger onCompromised
-    rimraf.sync(`${tmpDir}/foo.lock`);
+    fs.rmSync(`${tmpDir}/foo.lock`, { recursive: true, force: true });
 
     await deferred.promise;
 });
@@ -364,11 +356,11 @@ it('should call the compromised function if ENOENT was detected when updating th
 it('should call the compromised function if failed to update the lockfile mtime too many times (stat)', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 
-    const customFs = { ...fs };
+    const customFs: any = { ...fs };
 
     const deferred = pDefer();
 
-    const handleCompromised = (err) => {
+    const handleCompromised = (err: any) => {
         expect(err.code).toBe('ECOMPROMISED');
         expect(err.message).toMatch('foo');
 
@@ -380,9 +372,10 @@ it('should call the compromised function if failed to update the lockfile mtime 
         update: 1000,
         stale: 5000,
         onCompromised: handleCompromised,
+        lockfilePath: `${tmpDir}/foo.lock`,
     });
 
-    customFs.stat = (path, callback) => callback(new Error('foo'));
+    customFs.stat = (path: any, callback: any) => callback(new Error('foo'));
 
     await deferred.promise;
 }, 10000);
@@ -390,11 +383,11 @@ it('should call the compromised function if failed to update the lockfile mtime 
 it('should call the compromised function if failed to update the lockfile mtime too many times (utimes)', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 
-    const customFs = { ...fs };
+    const customFs: any = { ...fs };
 
     const deferred = pDefer();
 
-    const handleCompromised = (err) => {
+    const handleCompromised = (err: any) => {
         expect(err.code).toBe('ECOMPROMISED');
         expect(err.message).toMatch('foo');
 
@@ -406,9 +399,10 @@ it('should call the compromised function if failed to update the lockfile mtime 
         update: 1000,
         stale: 5000,
         onCompromised: handleCompromised,
+        lockfilePath: `${tmpDir}/foo.lock`,
     });
 
-    customFs.utimes = (path, atime, mtime, callback) => callback(new Error('foo'));
+    customFs.utimes = (path: any, atime: any, mtime: any, callback: any) => callback(new Error('foo'));
 
     await deferred.promise;
 }, 10000);
@@ -416,11 +410,11 @@ it('should call the compromised function if failed to update the lockfile mtime 
 it('should call the compromised function if updating the lockfile took too much time', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 
-    const customFs = { ...fs };
+    const customFs: any = { ...fs };
 
     const deferred = pDefer();
 
-    const handleCompromised = (err) => {
+    const handleCompromised = (err: any) => {
         expect(err.code).toBe('ECOMPROMISED');
         expect(err.message).toMatch('foo');
 
@@ -432,9 +426,10 @@ it('should call the compromised function if updating the lockfile took too much 
         update: 1000,
         stale: 5000,
         onCompromised: handleCompromised,
+        lockfilePath: `${tmpDir}/foo.lock`,
     });
 
-    customFs.utimes = (path, atime, mtime, callback) => setTimeout(() => callback(new Error('foo')), 6000);
+    customFs.utimes = (path: any, atime: any, mtime: any, callback: any) => setTimeout(() => callback(new Error('foo')), 6000);
 
     await deferred.promise;
 }, 10000);
@@ -442,11 +437,11 @@ it('should call the compromised function if updating the lockfile took too much 
 it('should call the compromised function if lock was acquired by someone else due to staleness', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 
-    const customFs = { ...fs };
+    const customFs: any = { ...fs };
 
     const deferred = pDefer();
 
-    const handleCompromised = (err) => {
+    const handleCompromised = (err: any) => {
         expect(err.code).toBe('ECOMPROMISED');
         expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(true);
 
@@ -458,19 +453,20 @@ it('should call the compromised function if lock was acquired by someone else du
         update: 1000,
         stale: 3000,
         onCompromised: handleCompromised,
+        lockfilePath: `${tmpDir}/foo.lock`,
     });
 
-    customFs.utimes = (path, atime, mtime, callback) => setTimeout(() => callback(new Error('foo')), 6000);
+    customFs.utimes = (path: any, atime: any, mtime: any, callback: any) => setTimeout(() => callback(new Error('foo')), 6000);
 
-    await pDelay(4500);
+    await delay(4500);
 
-    await lockfile.lock(`${tmpDir}/foo`, { stale: 3000 });
+    await lockfile.lock(`${tmpDir}/foo`, { stale: 3000, lockfilePath: `${tmpDir}/foo.lock` });
 
     await deferred.promise;
 }, 10000);
 
 it('should throw an error by default when the lock is compromised', async () => {
-    const { stderr } = await execa('node', [`${__dirname}/fixtures/compromised.js`], { reject: false });
+    const { stderr } = await execa('node_modules/.bin/tsx', [`${__dirname}/fixtures/compromised.ts`], { reject: false });
 
     expect(stderr).toMatch('ECOMPROMISED');
 });
@@ -480,15 +476,15 @@ it('should set update to a minimum of 1000', async () => {
 
     expect.assertions(2);
 
-    await lockfile.lock(`${tmpDir}/foo`, { update: 100 });
+    await lockfile.lock(`${tmpDir}/foo`, { update: 100, lockfilePath: `${tmpDir}/foo.lock` });
 
     const mtime = fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime();
 
-    await pDelay(200);
+    await delay(200);
 
     expect(mtime).toBe(fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime());
 
-    await pDelay(1000);
+    await delay(1000);
 
     expect(fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime()).toBeGreaterThan(mtime);
 }, 10000);
@@ -498,15 +494,15 @@ it('should set update to a minimum of 1000 (falsy)', async () => {
 
     expect.assertions(2);
 
-    await lockfile.lock(`${tmpDir}/foo`, { update: false });
+    await lockfile.lock(`${tmpDir}/foo`, { update: false, lockfilePath: `${tmpDir}/foo.lock` });
 
     const mtime = fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime();
 
-    await pDelay(200);
+    await delay(200);
 
     expect(mtime).toBe(fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime());
 
-    await pDelay(1000);
+    await delay(1000);
 
     expect(fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime()).toBeGreaterThan(mtime);
 }, 10000);
@@ -516,24 +512,24 @@ it('should set update to a maximum of stale / 2', async () => {
 
     expect.assertions(2);
 
-    await lockfile.lock(`${tmpDir}/foo`, { update: 6000, stale: 5000 });
+    await lockfile.lock(`${tmpDir}/foo`, { update: 6000, stale: 5000, lockfilePath: `${tmpDir}/foo.lock` });
 
     const mtime = fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime();
 
-    await pDelay(2000);
+    await delay(2000);
 
     expect(mtime).toBe(fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime());
 
-    await pDelay(1000);
+    await delay(1000);
 
     expect(fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime()).toBeGreaterThan(mtime);
 }, 10000);
 
 it('should not fail to update mtime when we are over the threshold but mtime is ours', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
-    await lockfile.lock(`${tmpDir}/foo`, { update: 1000, stale: 2000 });
-    sleep(3000);
-    await pDelay(5000);
+    await lockfile.lock(`${tmpDir}/foo`, { update: 1000, stale: 2000, lockfilePath: `${tmpDir}/foo.lock` });
+    sleepSync(3000);
+    await delay(5000);
 }, 16000);
 
 it('should call the compromised function when we are over the threshold and mtime is not ours', async () => {
@@ -541,7 +537,7 @@ it('should call the compromised function when we are over the threshold and mtim
 
     const deferred = pDefer();
 
-    const handleCompromised = (err) => {
+    const handleCompromised = (err: any) => {
         expect(err.code).toBe('ECOMPROMISED');
         expect(err.message).toMatch('Unable to update lock within the stale threshold');
 
@@ -552,13 +548,14 @@ it('should call the compromised function when we are over the threshold and mtim
         update: 1000,
         stale: 2000,
         onCompromised: handleCompromised,
+        lockfilePath: `${tmpDir}/foo.lock`,
     });
 
     const mtime = new Date(Date.now() - 60000);
 
     fs.utimesSync(`${tmpDir}/foo.lock`, mtime, mtime);
 
-    sleep(3000);
+    sleepSync(3000);
 
     await deferred.promise;
 }, 16000);
@@ -568,7 +565,7 @@ it('should allow millisecond precision mtime', async () => {
 
     const customFs = {
         ...fs,
-        stat(path, cb) {
+        stat(path: any, cb: any) {
             fs.stat(path, (err, stat) => {
                 if (err) {
                     return cb(err);
@@ -585,11 +582,12 @@ it('should allow millisecond precision mtime', async () => {
     jest.spyOn(Date, 'now').mockImplementation(() => (Math.floor(dateNow() / 1000) * 1000) + 123);
 
     await lockfile.lock(`${tmpDir}/foo`, {
-        fs: customFs,
+        fs: customFs as any,
         update: 1000,
+        lockfilePath: `${tmpDir}/foo.lock`,
     });
 
-    await pDelay(3000);
+    await delay(3000);
 });
 
 it('should allow floor\'ed second precision mtime', async () => {
@@ -597,7 +595,7 @@ it('should allow floor\'ed second precision mtime', async () => {
 
     const customFs = {
         ...fs,
-        stat(path, cb) {
+        stat(path: any, cb: any) {
             fs.stat(path, (err, stat) => {
                 if (err) {
                     return cb(err);
@@ -611,11 +609,12 @@ it('should allow floor\'ed second precision mtime', async () => {
     };
 
     await lockfile.lock(`${tmpDir}/foo`, {
-        fs: customFs,
+        fs: customFs as any,
         update: 1000,
+        lockfilePath: `${tmpDir}/foo.lock`,
     });
 
-    await pDelay(3000);
+    await delay(3000);
 });
 
 it('should allow ceil\'ed second precision mtime', async () => {
@@ -623,7 +622,7 @@ it('should allow ceil\'ed second precision mtime', async () => {
 
     const customFs = {
         ...fs,
-        stat(path, cb) {
+        stat(path: any, cb: any) {
             fs.stat(path, (err, stat) => {
                 if (err) {
                     return cb(err);
@@ -637,9 +636,10 @@ it('should allow ceil\'ed second precision mtime', async () => {
     };
 
     await lockfile.lock(`${tmpDir}/foo`, {
-        fs: customFs,
+        fs: customFs as any,
         update: 1000,
+        lockfilePath: `${tmpDir}/foo.lock`,
     });
 
-    await pDelay(3000);
+    await delay(3000);
 });

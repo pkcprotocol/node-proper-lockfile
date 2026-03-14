@@ -1,12 +1,16 @@
-'use strict';
+import { LockFileFs } from './types';
 
 const cacheSymbol = Symbol();
 
-function probe(file, fs, callback) {
-    const cachedPrecision = fs[cacheSymbol];
+export function probe(
+    file: string,
+    fs: LockFileFs,
+    callback: (err: Error | null, mtime?: Date, precision?: string) => void,
+): void {
+    const cachedPrecision = (fs as any)[cacheSymbol];
 
     if (cachedPrecision) {
-        return fs.stat(file, (err, stat) => {
+        return fs.stat(file, (err: NodeJS.ErrnoException | null, stat?: any) => {
             /* istanbul ignore if */
             if (err) {
                 return callback(err);
@@ -19,13 +23,13 @@ function probe(file, fs, callback) {
     // Set mtime by ceiling Date.now() to seconds + 5ms so that it's "not on the second"
     const mtime = new Date((Math.ceil(Date.now() / 1000) * 1000) + 5);
 
-    fs.utimes(file, mtime, mtime, (err) => {
+    fs.utimes(file, mtime, mtime, (err: NodeJS.ErrnoException | null) => {
         /* istanbul ignore if */
         if (err) {
             return callback(err);
         }
 
-        fs.stat(file, (err, stat) => {
+        fs.stat(file, (err: NodeJS.ErrnoException | null, stat?: any) => {
             /* istanbul ignore if */
             if (err) {
                 return callback(err);
@@ -41,7 +45,7 @@ function probe(file, fs, callback) {
     });
 }
 
-function getMtime(precision) {
+export function getMtime(precision: string): Date {
     let now = Date.now();
 
     if (precision === 's') {
@@ -50,6 +54,3 @@ function getMtime(precision) {
 
     return new Date(now);
 }
-
-module.exports.probe = probe;
-module.exports.getMtime = getMtime;
