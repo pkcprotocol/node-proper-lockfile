@@ -1,5 +1,5 @@
 {
-  "name": "@pkc/proper-lock-file",
+  "name": "@pkcprotocol/proper-lock-file",
   "version": "4.1.2",
   "description": "A inter-process and inter-machine lockfile utility that works on a local or network file system",
   "keywords": [
