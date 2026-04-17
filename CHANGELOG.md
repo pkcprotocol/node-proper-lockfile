@@ -1,5 +1,11 @@
 # Changelog
 
+## [4.2.1](https://github.com/pkcprotocol/node-proper-lockfile/compare/v4.2.0...v4.2.1) (2026-04-17)
+
+### Bug Fixes
+
+* use type-only import for type declarations ([84295e4](https://github.com/pkcprotocol/node-proper-lockfile/commit/84295e4472fa38017b928176b006968f4deb5ba9))
+
 ## 4.2.0 (2026-04-17)
 
 ### ⚠ BREAKING CHANGES
