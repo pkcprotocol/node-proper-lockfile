@@ -10,13 +10,13 @@
     "fs",
     "cross-process"
   ],
-  "author": "André Cruz <andre@moxy.studio>",
-  "homepage": "https://github.com/moxystudio/node-proper-lockfile",
-  "repository": {
-    "type": "git",
-    "url": "git@github.com:plebbit/node-proper-lockfile.git"
-  },
+  "author": "pkcprotocol",
+  "homepage": "https://github.com/pkcprotocol/node-proper-lockfile",
+  "repository": "github:pkcprotocol/node-proper-lockfile",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
   "files": [
@@ -26,13 +26,11 @@
     "node": ">=20"
   },
   "scripts": {
-    "prepare": "npm run build",
+    "prepare": "husky",
     "build": "tsc",
     "lint": "eslint .",
     "test": "jest --env node --coverage --runInBand",
-    "prerelease": "npm t && npm run lint",
-    "release": "npm version patch",
-    "postrelease": "git push --follow-tags origin HEAD && npm publish"
+    "release": "HUSKY=0 release-it --config config/.release-it.json"
   },
   "dependencies": {
     "graceful-fs": "4.2.11",
@@ -52,6 +50,18 @@
     "ts-jest": "29.2.5",
     "tsx": "4.19.2",
     "typescript": "5.7.3",
-    "typescript-eslint": "8.19.1"
+    "typescript-eslint": "8.19.1",
+    "@commitlint/cli": "20.4.3",
+    "@commitlint/config-conventional": "20.4.3",
+    "@release-it/conventional-changelog": "10.0.5",
+    "commitizen": "4.3.1",
+    "cz-conventional-changelog": "3.3.0",
+    "husky": "9.1.7",
+    "release-it": "19.2.4"
+  },
+  "config": {
+    "commitizen": {
+      "path": "cz-conventional-changelog"
+    }
   }
 }
