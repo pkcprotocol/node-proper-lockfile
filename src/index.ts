@@ -1,6 +1,6 @@
 import * as lockfileModule from './lockfile';
 import { toPromise, toSync, toSyncOptions } from './adapter';
-import { LockOptions, UnlockOptions, CheckOptions, ReleaseFunction, ReleaseFunctionSync } from './types';
+import type { LockOptions, UnlockOptions, CheckOptions, ReleaseFunction, ReleaseFunctionSync } from './types';
 
 async function lock(file: string, options: Partial<LockOptions> & { lockfilePath: string }): Promise<ReleaseFunction> {
     const release = await toPromise(lockfileModule.lock)(file, options);
