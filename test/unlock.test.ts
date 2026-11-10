@@ -97,6 +97,16 @@ it('should ignore ENOENT errors when removing the lockfile', async () => {
     expect(customFs.rmdir).toHaveBeenCalledTimes(1);
 });
 
+it('should not fail if the lockfile was already removed', async () => {
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+
+    await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+    fs.rmdirSync(`${tmpDir}/foo.lock`);
+
+    await lockfile.unlock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+});
+
 it('should stop updating the lockfile mtime', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 

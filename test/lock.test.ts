@@ -250,6 +250,36 @@ it('should fail if someone else is taking over a stale lock', async () => {
     }
 });
 
+it('should fail if someone else took over the stale lock before the takeover guard was acquired', async () => {
+    const mtime = new Date(Date.now() - 60000);
+    const customFs = {
+        ...fs,
+        mkdir: (path: any, callback: any) => {
+            // Simulate another process finishing its takeover right before ours starts
+            if (String(path).endsWith('.takeover')) {
+                fs.rmdirSync(`${tmpDir}/foo.lock`);
+                fs.mkdirSync(`${tmpDir}/foo.lock`);
+            }
+
+            (fs.mkdir as any)(path, callback);
+        },
+    };
+
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+    fs.mkdirSync(`${tmpDir}/foo.lock`);
+    fs.utimesSync(`${tmpDir}/foo.lock`, mtime, mtime);
+
+    expect.assertions(3);
+
+    try {
+        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs as any, lockfilePath: `${tmpDir}/foo.lock` });
+    } catch (err: any) {
+        expect(err.code).toBe('ELOCKED');
+        expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(true);
+        expect(fs.existsSync(`${tmpDir}/foo.lock.takeover`)).toBe(false);
+    }
+});
+
 it('should take over a stale lock if a crashed process left the takeover guard behind', async () => {
     const mtime = new Date(Date.now() - 60000);
 
