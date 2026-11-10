@@ -158,6 +158,8 @@ lockfile.check('some/file')
 Sync version of `.lock()`.   
 Returns the `release` function or throws on error.
 
+Retries are not supported: a positive `retries` count throws an `ESYNC` error, and a retry options object without one is treated as `0`.
+
 ### .unlockSync(file, [options])
 
 Sync version of `.unlock()`.   
