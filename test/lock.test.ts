@@ -179,6 +179,117 @@ it('should remove and acquire over stale locks', async () => {
     expect(fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime()).toBeGreaterThan(Date.now() - 3000);
 });
 
+it('should let only one of two concurrent acquirers take over a stale lock', async () => {
+    const mtime = new Date(Date.now() - 60000);
+
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+    fs.mkdirSync(`${tmpDir}/foo.lock`);
+    fs.utimesSync(`${tmpDir}/foo.lock`, mtime, mtime);
+
+    // Both acquirers find the same stale lock. The first removes it only after the second has
+    // judged it stale too, and the second removes it only after the first has finished.
+    const secondStatted = pDefer();
+    const firstSettled = pDefer();
+
+    const firstFs: any = {
+        ...fs,
+        rmdir: (path: any, callback: any) => {
+            if (path !== `${tmpDir}/foo.lock`) {
+                return (fs.rmdir as any)(path, callback);
+            }
+
+            secondStatted.promise.then(() => (fs.rmdir as any)(path, callback));
+        },
+    };
+    const secondFs: any = {
+        ...fs,
+        stat: (path: any, callback: any) => (fs.stat as any)(path, (err: any, stat: any) => {
+            callback(err, stat);
+
+            if (path === `${tmpDir}/foo.lock`) {
+                secondStatted.resolve();
+            }
+        }),
+        rmdir: (path: any, callback: any) => {
+            if (path !== `${tmpDir}/foo.lock`) {
+                return (fs.rmdir as any)(path, callback);
+            }
+
+            firstSettled.promise.then(() => (fs.rmdir as any)(path, callback));
+        },
+    };
+
+    const first = lockfile.lock(`${tmpDir}/foo`, { fs: firstFs, lockfilePath: `${tmpDir}/foo.lock` });
+
+    first.then(() => firstSettled.resolve(), () => firstSettled.resolve());
+
+    const second = lockfile.lock(`${tmpDir}/foo`, { fs: secondFs, lockfilePath: `${tmpDir}/foo.lock` });
+
+    const results = await Promise.allSettled([first, second]);
+    const rejected = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason.code).toBe('ELOCKED');
+});
+
+it('should fail if someone else is taking over a stale lock', async () => {
+    const mtime = new Date(Date.now() - 60000);
+
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+    fs.mkdirSync(`${tmpDir}/foo.lock`);
+    fs.utimesSync(`${tmpDir}/foo.lock`, mtime, mtime);
+    fs.mkdirSync(`${tmpDir}/foo.lock.takeover`);
+
+    expect.assertions(2);
+
+    try {
+        await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+    } catch (err: any) {
+        expect(err.code).toBe('ELOCKED');
+        expect(fs.existsSync(`${tmpDir}/foo.lock.takeover`)).toBe(true);
+    }
+});
+
+it('should take over a stale lock if a crashed process left the takeover guard behind', async () => {
+    const mtime = new Date(Date.now() - 60000);
+
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+    fs.mkdirSync(`${tmpDir}/foo.lock`);
+    fs.utimesSync(`${tmpDir}/foo.lock`, mtime, mtime);
+    fs.mkdirSync(`${tmpDir}/foo.lock.takeover`);
+    fs.utimesSync(`${tmpDir}/foo.lock.takeover`, mtime, mtime);
+
+    await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+    expect(fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime()).toBeGreaterThan(Date.now() - 3000);
+    expect(fs.existsSync(`${tmpDir}/foo.lock.takeover`)).toBe(false);
+});
+
+it('should acquire the lock if the stale lockfile was removed while taking it over', async () => {
+    const mtime = new Date(Date.now() - 60000);
+    let count = 0;
+    const customFs = {
+        ...fs,
+        stat: jest.fn((path: any, callback: any) => {
+            // Remove it right before the check made while holding the takeover guard
+            if (count === 1) {
+                fs.rmSync(`${tmpDir}/foo.lock`, { recursive: true, force: true });
+            }
+            count += 1;
+            (fs.stat as any)(path, callback);
+        }),
+    };
+
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+    fs.mkdirSync(`${tmpDir}/foo.lock`);
+    fs.utimesSync(`${tmpDir}/foo.lock`, mtime, mtime);
+
+    await lockfile.lock(`${tmpDir}/foo`, { fs: customFs as any, lockfilePath: `${tmpDir}/foo.lock` });
+
+    expect(fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime()).toBeGreaterThan(Date.now() - 3000);
+    expect(fs.existsSync(`${tmpDir}/foo.lock.takeover`)).toBe(false);
+});
+
 it('should retry if the lockfile was removed when verifying staleness', async () => {
     const mtime = new Date(Date.now() - 60000);
     let count = 0;

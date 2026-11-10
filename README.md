@@ -31,6 +31,8 @@ The lockfile path is based on the file path you are trying to lock by suffixing 
 
 When a lock is successfully acquired, the lockfile's `mtime` (modified time) is periodically updated to prevent staleness. This allows to effectively check if a lock is stale by checking its `mtime` against a stale threshold. If the update of the mtime fails several times, the lock might be compromised. The `mtime` is [supported](http://en.wikipedia.org/wiki/Comparison_of_file_systems) in almost every `filesystem`.
 
+A stale lock is taken over by removing and recreating the lockfile. While doing so, a `<lockfile>.takeover` directory is briefly created next to it, so that only one process at a time can take the lock over.
+
 
 ### Comparison
 

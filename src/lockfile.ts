@@ -105,15 +105,80 @@ function acquireLock(
                 );
             }
 
-            // If it's stale, remove it and try again!
-            // Skip stale check to avoid recursiveness
+            // If it's stale, take it over!
+            takeOverLock(file, options, callback);
+        });
+    });
+}
+
+// Removes a stale lock and acquires it. Two acquirers that judged the same lock stale must not both
+// do this, or the second removal deletes the lock the first one has just created: a guard directory
+// next to the lockfile lets only one of them take it over at a time.
+function takeOverLock(
+    file: string,
+    options: ResolvedLockOptions,
+    callback: (err: Error | null, mtime?: Date, mtimePrecision?: string) => void,
+): void {
+    const lockfilePath = getLockFile(file, options);
+    const guardPath = `${path.resolve(lockfilePath)}.takeover`;
+
+    acquireTakeoverGuard(guardPath, options, true, (err) => {
+        if (err) {
+            return callback(
+                err.code === 'EEXIST'
+                    ? Object.assign(new Error('Lock file is already being held'), { code: 'ELOCKED', file })
+                    : err,
+            );
+        }
+
+        const done = (err: Error | null, mtime?: Date, precision?: string) => {
+            options.fs.rmdir(guardPath, () => callback(err, mtime, precision));
+        };
+
+        // Skip stale check to avoid recursiveness
+        const acquire = () => acquireLock(file, { ...options, stale: 0 }, done);
+
+        // Check again now that we hold the guard, someone else may have taken it over meanwhile
+        options.fs.stat(lockfilePath, (err: any, stat: any) => {
+            if (err) {
+                return err.code === 'ENOENT' ? acquire() : done(err);
+            }
+
+            if (!isLockStale(stat, options)) {
+                return done(
+                    Object.assign(new Error('Lock file is already being held'), { code: 'ELOCKED', file }),
+                );
+            }
+
             removeLock(file, options, (err) => {
                 if (err) {
-                    return callback(err);
+                    return done(err);
                 }
 
-                acquireLock(file, { ...options, stale: 0 }, callback);
+                acquire();
             });
+        });
+    });
+}
+
+function acquireTakeoverGuard(
+    guardPath: string,
+    options: ResolvedLockOptions,
+    removeIfStale: boolean,
+    callback: (err?: any) => void,
+): void {
+    options.fs.mkdir(guardPath, (err: any) => {
+        if (!err || err.code !== 'EEXIST' || !removeIfStale) {
+            return callback(err);
+        }
+
+        // Someone else is taking the lock over, unless the guard was left behind by a crashed process
+        options.fs.stat(guardPath, (statErr: any, stat: any) => {
+            if (statErr || !isLockStale(stat, options)) {
+                return callback(err);
+            }
+
+            options.fs.rmdir(guardPath, () => acquireTakeoverGuard(guardPath, options, false, callback));
         });
     });
 }
