@@ -1,5 +1,6 @@
 import fs from 'graceful-fs';
 import lockfile from '../src/index';
+import { toSync } from '../src/adapter';
 import unlockAll from './util/unlockAll';
 
 const tmpDir = `${__dirname}/tmp`;
@@ -61,6 +62,23 @@ describe('.lockSync()', () => {
         }).not.toThrow();
     });
 
+    it('should not retry when retries is an object without a retries count', () => {
+        fs.writeFileSync(`${tmpDir}/foo`, '');
+
+        lockfile.lockSync(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+        // The retry module defaults to 10 retries when the object has no `retries` key
+        expect(() => lockfile.lockSync(`${tmpDir}/foo`, { retries: { minTimeout: 100 }, lockfilePath: `${tmpDir}/foo.lock` })).toThrow(/already being held/);
+
+        lockfile.unlockSync(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+        const release = lockfile.lockSync(`${tmpDir}/foo`, { retries: { minTimeout: 100 }, lockfilePath: `${tmpDir}/foo.lock` });
+
+        release();
+
+        expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
+    });
+
     it('should fail syncronously if release throws', () => {
         fs.writeFileSync(`${tmpDir}/foo`, '');
 
@@ -71,6 +89,14 @@ describe('.lockSync()', () => {
         release();
 
         expect(() => release()).toThrow('Lock is already released');
+    });
+});
+
+describe('toSync()', () => {
+    it('should throw if the callback was not called synchronously', () => {
+        const method = (callback: (err: Error | null, result?: any) => void) => setTimeout(() => callback(null, 'foo'), 0);
+
+        expect(() => toSync(method)()).toThrow(expect.objectContaining({ code: 'ESYNC' }));
     });
 });
 
