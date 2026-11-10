@@ -465,6 +465,44 @@ it('should call the compromised function if lock was acquired by someone else du
     await deferred.promise;
 }, 10000);
 
+it('should keep checking its own lock after a newer lock on the same file replaced it', async () => {
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+
+    const customFs: any = { ...fs };
+    const deferred = pDefer();
+
+    const handleCompromised = (err: any) => {
+        expect(err.code).toBe('ECOMPROMISED');
+
+        deferred.resolve();
+    };
+
+    await lockfile.lock(`${tmpDir}/foo`, {
+        fs: customFs,
+        update: 1000,
+        stale: 3000,
+        onCompromised: handleCompromised,
+        lockfilePath: `${tmpDir}/foo.lock`,
+    });
+
+    // Simulate the first lock going stale, so that a new lock in this process takes it over
+    const mtime = new Date(Date.now() - 60000);
+
+    fs.utimesSync(`${tmpDir}/foo.lock`, mtime, mtime);
+
+    await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+    // Make the first lock's next check fail with a transient error, so that it schedules a retry
+    customFs.stat = (path: any, callback: any) => {
+        customFs.stat = fs.stat;
+        callback(Object.assign(new Error('foo'), { code: 'EIO' }));
+    };
+
+    await deferred.promise;
+
+    expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(true);
+}, 10000);
+
 it('should throw an error by default when the lock is compromised', async () => {
     const { stderr } = await execa('node_modules/.bin/tsx', [`${__dirname}/fixtures/compromised.ts`], { reject: false });
 

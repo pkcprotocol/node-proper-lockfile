@@ -136,12 +136,10 @@ function removeLock(
     });
 }
 
-function updateLock(file: string, options: ResolvedLockOptions): void {
-    if (typeof options.lockfilePath !== 'string') {
-        throw Error('Options is not defined ');
-    }
-    const lockKey = file + options.lockfilePath;
-    const lock = locks[lockKey];
+// Takes the entry itself rather than looking it up by key: a newer lock on the same file may
+// have replaced it in `locks` after it went stale
+function updateLock(file: string, lock: LockEntry): void {
+    const options = lock.options;
 
     // Just for safety, should never happen
     /* istanbul ignore if */
@@ -177,7 +175,7 @@ function updateLock(file: string, options: ResolvedLockOptions): void {
 
                 lock.updateDelay = 1000;
 
-                return updateLock(file, options);
+                return updateLock(file, lock);
             }
 
             const isMtimeOurs = lock.mtime.getTime() === stat.mtime.getTime();
@@ -219,14 +217,14 @@ function updateLock(file: string, options: ResolvedLockOptions): void {
 
                     lock.updateDelay = 1000;
 
-                    return updateLock(file, options);
+                    return updateLock(file, lock);
                 }
 
                 // All ok, keep updating..
                 lock.mtime = mtime;
                 lock.lastUpdate = Date.now();
                 lock.updateDelay = null;
-                updateLock(file, options);
+                updateLock(file, lock);
             });
         });
     }, lock.updateDelay!);
@@ -338,7 +336,7 @@ export function lock(
                 });
 
                 // We must keep the lock fresh to avoid staleness
-                updateLock(file, opts);
+                updateLock(file, lockEntry);
 
                 callback(null, (releasedCallback?: (err?: Error | null) => void) => {
                     if (lockEntry.released) {
@@ -348,6 +346,26 @@ export function lock(
                                 Object.assign(
                                     new Error('Lock is already released'),
                                     { code: 'ERELEASED' },
+                                ),
+                            )
+                        );
+                    }
+
+                    // This lock went stale and a newer lock on the same file replaced it,
+                    // so unlocking by key would release that one instead
+                    if (locks[lockKey] !== lockEntry) {
+                        if (lockEntry.updateTimeout) {
+                            clearTimeout(lockEntry.updateTimeout);
+                        }
+
+                        lockEntry.released = true;
+
+                        return (
+                            releasedCallback &&
+                            releasedCallback(
+                                Object.assign(
+                                    new Error('Lock was compromised by a newer lock on the same file'),
+                                    { code: 'ECOMPROMISED' },
                                 ),
                             )
                         );

@@ -34,6 +34,26 @@ it('should remove the lockfile', async () => {
     expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
 });
 
+it('should not release a newer lock on the same file', async () => {
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+
+    const release1 = await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+    // Simulate the first lock going stale, so that a new lock in this process takes it over
+    const mtime = new Date(Date.now() - 60000);
+
+    fs.utimesSync(`${tmpDir}/foo.lock`, mtime, mtime);
+
+    const release2 = await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+    await expect(release1()).rejects.toMatchObject({ code: 'ECOMPROMISED' });
+    expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(true);
+
+    await release2();
+
+    expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
+});
+
 it('should fail when releasing twice', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 
