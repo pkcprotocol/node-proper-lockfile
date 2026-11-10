@@ -1,6 +1,9 @@
 import fs from 'graceful-fs';
 import { LockFileFs } from './types';
 
+// Marks an fs created by createSyncFs, whose methods call back synchronously
+export const syncFs = Symbol('syncFs');
+
 function createSyncFs(inputFs: LockFileFs): LockFileFs {
     const methods = ['mkdir', 'realpath', 'stat', 'rmdir', 'utimes'] as const;
     const newFs: any = { ...inputFs };
@@ -19,6 +22,8 @@ function createSyncFs(inputFs: LockFileFs): LockFileFs {
             callback(null, ret);
         };
     });
+
+    newFs[syncFs] = true;
 
     return newFs as LockFileFs;
 }

@@ -152,6 +152,38 @@ it('should stop updating the lockfile mtime (slow fs + new lock)', async () => {
     expect(customFs.utimes).toHaveBeenCalledTimes(1);
 }, 10000);
 
+it('should let an update of the lockfile mtime in flight finish before removing it', async () => {
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+
+    const customFs: any = { ...fs };
+
+    await lockfile.lock(`${tmpDir}/foo`, { fs: customFs, update: 1000, lockfilePath: `${tmpDir}/foo.lock` });
+
+    // Delay the next mtime update, so that it is still in flight when the lock is released
+    const utimesCalled = pDefer();
+
+    customFs.utimes = jest.fn((...args: any[]) => {
+        utimesCalled.resolve();
+        setTimeout(() => (fs.utimes as any)(...args), 500);
+    });
+
+    await utimesCalled.promise;
+
+    await lockfile.unlock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+    expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
+
+    // The old update must not land on a new lock
+    const handleCompromised = jest.fn();
+
+    await lockfile.lock(`${tmpDir}/foo`, { update: 1000, onCompromised: handleCompromised, lockfilePath: `${tmpDir}/foo.lock` });
+
+    await delay(2000);
+
+    expect(customFs.utimes).toHaveBeenCalledTimes(1);
+    expect(handleCompromised).not.toHaveBeenCalled();
+}, 10000);
+
 it('should not report the lock as compromised if it was released while checking its mtime', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 

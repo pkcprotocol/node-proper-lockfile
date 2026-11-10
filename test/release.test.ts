@@ -34,6 +34,22 @@ it('should remove the lockfile', async () => {
     expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
 });
 
+it('should not remove the lockfile if someone else acquired it', async () => {
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+
+    const release = await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+    // Simulate another process taking over the lock after it went stale
+    const mtime = new Date(fs.statSync(`${tmpDir}/foo.lock`).mtime.getTime() + 1500);
+
+    fs.rmdirSync(`${tmpDir}/foo.lock`);
+    fs.mkdirSync(`${tmpDir}/foo.lock`);
+    fs.utimesSync(`${tmpDir}/foo.lock`, mtime, mtime);
+
+    await expect(release()).rejects.toMatchObject({ code: 'ECOMPROMISED' });
+    expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(true);
+});
+
 it('should not release a newer lock on the same file', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 

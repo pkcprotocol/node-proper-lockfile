@@ -2,6 +2,7 @@ import fs from 'graceful-fs';
 import lockfile from '../src/index';
 import { toSync } from '../src/adapter';
 import unlockAll from './util/unlockAll';
+import { delay, pDefer } from './util/helpers';
 
 const tmpDir = `${__dirname}/tmp`;
 
@@ -112,6 +113,30 @@ describe('.unlockSync()', () => {
 
         expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
     });
+
+    it('should not wait for an mtime update in flight of a lock acquired with the async api', async () => {
+        fs.writeFileSync(`${tmpDir}/foo`, '');
+
+        const customFs: any = { ...fs };
+
+        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs, update: 1000, lockfilePath: `${tmpDir}/foo.lock` });
+
+        // Delay the next mtime update, so that it is still in flight when the lock is released
+        const utimesCalled = pDefer();
+
+        customFs.utimes = (...args: any[]) => {
+            utimesCalled.resolve();
+            setTimeout(() => (fs.utimes as any)(...args), 500);
+        };
+
+        await utimesCalled.promise;
+
+        lockfile.unlockSync(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+        expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
+
+        await delay(1000);
+    }, 10000);
 
     it('should fail is lock is not acquired', () => {
         fs.writeFileSync(`${tmpDir}/foo`, '');

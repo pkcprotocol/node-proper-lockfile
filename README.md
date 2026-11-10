@@ -109,6 +109,8 @@ Releases a previously acquired lock on `file` or rejects the promise on error.
 
 Whenever possible you should use the `release` function instead (as exemplified above). Still there are cases in which it's hard to keep a reference to it around code. In those cases `unlock()` might be handy.
 
+If the lockfile no longer belongs to this lock (it went stale and someone else acquired it), it is left in place and the promise rejects with an `ECOMPROMISED` error. The `release` function behaves the same way.
+
 Available options:
 
 - `realpath`: Resolve symlinks using realpath, defaults to `true` (note that if `true`, the `file` must exist previously)
@@ -167,7 +169,7 @@ Returns a boolean or throws on error.
 
 ## Graceful exit
 
-`proper-lockfile` automatically removes locks if the process exits, except if the process is killed with SIGKILL or it crashes due to a VM fatal error (e.g.: out of memory).
+`proper-lockfile` automatically removes locks if the process exits, except if the process is killed with SIGKILL or it crashes due to a VM fatal error (e.g.: out of memory). Lockfiles that someone else acquired after they went stale are left in place.
 
 
 ## Tests
