@@ -156,6 +156,11 @@ function updateLock(file: string, options: ResolvedLockOptions): void {
         // Stat the file to check if mtime is still ours
         // If it is, we can still recover from a system sleep or a busy event loop
         options.fs.stat(lock.lockfilePath, (err: any, stat: any) => {
+            // Ignore if the lock was released while the stat was in flight
+            if (lock.released) {
+                return;
+            }
+
             const isOverThreshold =
                 lock.lastUpdate + options.stale < Date.now();
 

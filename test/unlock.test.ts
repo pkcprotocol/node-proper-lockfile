@@ -3,7 +3,7 @@ import fs from 'graceful-fs';
 const clearTimeouts = require('@segment/clear-timeouts');
 import lockfile from '../src/index';
 import unlockAll from './util/unlockAll';
-import { delay } from './util/helpers';
+import { delay, pDefer } from './util/helpers';
 
 const tmpDir = `${__dirname}/tmp`;
 
@@ -150,6 +150,37 @@ it('should stop updating the lockfile mtime (slow fs + new lock)', async () => {
     await delay(3000);
 
     expect(customFs.utimes).toHaveBeenCalledTimes(1);
+}, 10000);
+
+it('should not report the lock as compromised if it was released while checking its mtime', async () => {
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+
+    const customFs: any = { ...fs };
+    const handleCompromised = jest.fn();
+
+    await lockfile.lock(`${tmpDir}/foo`, {
+        fs: customFs,
+        update: 1000,
+        onCompromised: handleCompromised,
+        lockfilePath: `${tmpDir}/foo.lock`,
+    });
+
+    // Delay the next stat issued by the update loop so that the release happens while it is in flight
+    const statCalled = pDefer();
+
+    customFs.stat = (path: any, callback: any) => {
+        customFs.stat = fs.stat;
+        statCalled.resolve();
+        setTimeout(() => (fs.stat as any)(path, callback), 500);
+    };
+
+    await statCalled.promise;
+
+    await lockfile.unlock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+    await delay(1000);
+
+    expect(handleCompromised).not.toHaveBeenCalled();
 }, 10000);
 
 it('should resolve symlinks by default', async () => {
