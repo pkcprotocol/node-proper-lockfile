@@ -617,6 +617,44 @@ it('should allow floor\'ed second precision mtime', async () => {
     await delay(3000);
 });
 
+it('should probe the mtime precision of each volume', async () => {
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+    fs.writeFileSync(`${tmpDir}/bar`, '');
+
+    // Emulate `bar.lock` living on another volume whose mtime only has second precision
+    const customFs = {
+        ...fs,
+        stat(path: any, cb: any) {
+            fs.stat(path, (err, stat) => {
+                if (err) {
+                    return cb(err);
+                }
+
+                if (String(path).endsWith('bar.lock')) {
+                    stat.dev += 1;
+                    stat.mtime = new Date(Math.floor(stat.mtime.getTime() / 1000) * 1000);
+                }
+
+                cb(null, stat);
+            });
+        },
+    };
+
+    const handleCompromised = jest.fn();
+
+    await lockfile.lock(`${tmpDir}/foo`, { fs: customFs as any, lockfilePath: `${tmpDir}/foo.lock` });
+    await lockfile.lock(`${tmpDir}/bar`, {
+        fs: customFs as any,
+        update: 1000,
+        onCompromised: handleCompromised,
+        lockfilePath: `${tmpDir}/bar.lock`,
+    });
+
+    await delay(3000);
+
+    expect(handleCompromised).not.toHaveBeenCalled();
+});
+
 it('should allow ceil\'ed second precision mtime', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 
