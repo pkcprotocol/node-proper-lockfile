@@ -1,6 +1,8 @@
 import fs from 'graceful-fs';
 import lockfile from '../src/index';
+import { toSync } from '../src/adapter';
 import unlockAll from './util/unlockAll';
+import { delay, pDefer } from './util/helpers';
 
 const tmpDir = `${__dirname}/tmp`;
 
@@ -61,6 +63,23 @@ describe('.lockSync()', () => {
         }).not.toThrow();
     });
 
+    it('should not retry when retries is an object without a retries count', () => {
+        fs.writeFileSync(`${tmpDir}/foo`, '');
+
+        lockfile.lockSync(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+        // The retry module defaults to 10 retries when the object has no `retries` key
+        expect(() => lockfile.lockSync(`${tmpDir}/foo`, { retries: { minTimeout: 100 }, lockfilePath: `${tmpDir}/foo.lock` })).toThrow(/already being held/);
+
+        lockfile.unlockSync(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+        const release = lockfile.lockSync(`${tmpDir}/foo`, { retries: { minTimeout: 100 }, lockfilePath: `${tmpDir}/foo.lock` });
+
+        release();
+
+        expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
+    });
+
     it('should fail syncronously if release throws', () => {
         fs.writeFileSync(`${tmpDir}/foo`, '');
 
@@ -71,6 +90,14 @@ describe('.lockSync()', () => {
         release();
 
         expect(() => release()).toThrow('Lock is already released');
+    });
+});
+
+describe('toSync()', () => {
+    it('should throw if the callback was not called synchronously', () => {
+        const method = (callback: (err: Error | null, result?: any) => void) => setTimeout(() => callback(null, 'foo'), 0);
+
+        expect(() => toSync(method)()).toThrow(expect.objectContaining({ code: 'ESYNC' }));
     });
 });
 
@@ -86,6 +113,30 @@ describe('.unlockSync()', () => {
 
         expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
     });
+
+    it('should not wait for an mtime update in flight of a lock acquired with the async api', async () => {
+        fs.writeFileSync(`${tmpDir}/foo`, '');
+
+        const customFs: any = { ...fs };
+
+        await lockfile.lock(`${tmpDir}/foo`, { fs: customFs, update: 1000, lockfilePath: `${tmpDir}/foo.lock` });
+
+        // Delay the next mtime update, so that it is still in flight when the lock is released
+        const utimesCalled = pDefer();
+
+        customFs.utimes = (...args: any[]) => {
+            utimesCalled.resolve();
+            setTimeout(() => (fs.utimes as any)(...args), 500);
+        };
+
+        await utimesCalled.promise;
+
+        lockfile.unlockSync(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+        expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
+
+        await delay(1000);
+    }, 10000);
 
     it('should fail is lock is not acquired', () => {
         fs.writeFileSync(`${tmpDir}/foo`, '');

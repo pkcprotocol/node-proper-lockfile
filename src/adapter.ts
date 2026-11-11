@@ -1,6 +1,9 @@
 import fs from 'graceful-fs';
 import { LockFileFs } from './types';
 
+// Marks an fs created by createSyncFs, whose methods call back synchronously
+export const syncFs = Symbol('syncFs');
+
 function createSyncFs(inputFs: LockFileFs): LockFileFs {
     const methods = ['mkdir', 'realpath', 'stat', 'rmdir', 'utimes'] as const;
     const newFs: any = { ...inputFs };
@@ -19,6 +22,8 @@ function createSyncFs(inputFs: LockFileFs): LockFileFs {
             callback(null, ret);
         };
     });
+
+    newFs[syncFs] = true;
 
     return newFs as LockFileFs;
 }
@@ -41,15 +46,22 @@ export function toPromise<T extends (...args: any[]) => any>(method: T) {
 
 export function toSync<T extends (...args: any[]) => any>(method: T) {
     return (...args: any[]): any => {
+        let called = false;
         let err: Error | undefined;
         let result: any;
 
         args.push((_err: Error | null, _result: any) => {
+            called = true;
             err = _err ?? undefined;
             result = _result;
         });
 
         method(...args);
+
+        // Returning here would hand out an undefined result for an operation still in progress
+        if (!called) {
+            throw Object.assign(new Error('Operation did not complete synchronously'), { code: 'ESYNC' });
+        }
 
         if (err) {
             throw err;
@@ -73,6 +85,10 @@ export function toSyncOptions<T extends { fs?: LockFileFs; retries?: any }>(opti
     ) {
         throw Object.assign(new Error('Cannot use retries with the sync api'), { code: 'ESYNC' });
     }
+
+    // A retry options object without a positive `retries` count still gets the retry module's
+    // default of 10 retries, which would run on timers after the sync call has returned
+    (opts as any).retries = 0;
 
     return opts;
 }

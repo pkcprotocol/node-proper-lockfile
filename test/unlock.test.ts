@@ -3,7 +3,7 @@ import fs from 'graceful-fs';
 const clearTimeouts = require('@segment/clear-timeouts');
 import lockfile from '../src/index';
 import unlockAll from './util/unlockAll';
-import { delay } from './util/helpers';
+import { delay, pDefer } from './util/helpers';
 
 const tmpDir = `${__dirname}/tmp`;
 
@@ -97,6 +97,16 @@ it('should ignore ENOENT errors when removing the lockfile', async () => {
     expect(customFs.rmdir).toHaveBeenCalledTimes(1);
 });
 
+it('should not fail if the lockfile was already removed', async () => {
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+
+    await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+    fs.rmdirSync(`${tmpDir}/foo.lock`);
+
+    await lockfile.unlock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+});
+
 it('should stop updating the lockfile mtime', async () => {
     fs.writeFileSync(`${tmpDir}/foo`, '');
 
@@ -150,6 +160,69 @@ it('should stop updating the lockfile mtime (slow fs + new lock)', async () => {
     await delay(3000);
 
     expect(customFs.utimes).toHaveBeenCalledTimes(1);
+}, 10000);
+
+it('should let an update of the lockfile mtime in flight finish before removing it', async () => {
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+
+    const customFs: any = { ...fs };
+
+    await lockfile.lock(`${tmpDir}/foo`, { fs: customFs, update: 1000, lockfilePath: `${tmpDir}/foo.lock` });
+
+    // Delay the next mtime update, so that it is still in flight when the lock is released
+    const utimesCalled = pDefer();
+
+    customFs.utimes = jest.fn((...args: any[]) => {
+        utimesCalled.resolve();
+        setTimeout(() => (fs.utimes as any)(...args), 500);
+    });
+
+    await utimesCalled.promise;
+
+    await lockfile.unlock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+    expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
+
+    // The old update must not land on a new lock
+    const handleCompromised = jest.fn();
+
+    await lockfile.lock(`${tmpDir}/foo`, { update: 1000, onCompromised: handleCompromised, lockfilePath: `${tmpDir}/foo.lock` });
+
+    await delay(2000);
+
+    expect(customFs.utimes).toHaveBeenCalledTimes(1);
+    expect(handleCompromised).not.toHaveBeenCalled();
+}, 10000);
+
+it('should not report the lock as compromised if it was released while checking its mtime', async () => {
+    fs.writeFileSync(`${tmpDir}/foo`, '');
+
+    const customFs: any = { ...fs };
+    const handleCompromised = jest.fn();
+
+    await lockfile.lock(`${tmpDir}/foo`, {
+        fs: customFs,
+        update: 1000,
+        onCompromised: handleCompromised,
+        lockfilePath: `${tmpDir}/foo.lock`,
+    });
+
+    // Delay the next stat issued by the update loop so that the release happens while it is in flight
+    const statCalled = pDefer();
+
+    customFs.stat = (path: any, callback: any) => {
+        customFs.stat = fs.stat;
+        statCalled.resolve();
+        setTimeout(() => (fs.stat as any)(path, callback), 500);
+    };
+
+    await statCalled.promise;
+
+    await lockfile.unlock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
+
+    await delay(1000);
+
+    expect(handleCompromised).not.toHaveBeenCalled();
 }, 10000);
 
 it('should resolve symlinks by default', async () => {

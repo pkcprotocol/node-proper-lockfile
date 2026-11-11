@@ -38,6 +38,12 @@ it('should remove open locks if the process crashes', async () => {
     expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(false);
 });
 
+it('should not remove locks taken over by someone else when the process exits', async () => {
+    await execa('node_modules/.bin/tsx', [`${__dirname}/fixtures/taken-over.ts`]);
+
+    expect(fs.existsSync(`${tmpDir}/foo.lock`)).toBe(true);
+});
+
 it('should not hold the process if it has no more work to do', async () => {
     await execa('node_modules/.bin/tsx', [`${__dirname}/fixtures/unref.ts`]);
 });

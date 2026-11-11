@@ -31,6 +31,8 @@ The lockfile path is based on the file path you are trying to lock by suffixing 
 
 When a lock is successfully acquired, the lockfile's `mtime` (modified time) is periodically updated to prevent staleness. This allows to effectively check if a lock is stale by checking its `mtime` against a stale threshold. If the update of the mtime fails several times, the lock might be compromised. The `mtime` is [supported](http://en.wikipedia.org/wiki/Comparison_of_file_systems) in almost every `filesystem`.
 
+A stale lock is taken over by removing and recreating the lockfile. While doing so, a `<lockfile>.takeover` directory is briefly created next to it, so that only one process at a time can take the lock over.
+
 
 ### Comparison
 
@@ -109,6 +111,8 @@ Releases a previously acquired lock on `file` or rejects the promise on error.
 
 Whenever possible you should use the `release` function instead (as exemplified above). Still there are cases in which it's hard to keep a reference to it around code. In those cases `unlock()` might be handy.
 
+If the lockfile no longer belongs to this lock (it went stale and someone else acquired it), it is left in place and the promise rejects with an `ECOMPROMISED` error. The `release` function behaves the same way.
+
 Available options:
 
 - `realpath`: Resolve symlinks using realpath, defaults to `true` (note that if `true`, the `file` must exist previously)
@@ -154,6 +158,8 @@ lockfile.check('some/file')
 Sync version of `.lock()`.   
 Returns the `release` function or throws on error.
 
+Retries are not supported: a positive `retries` count throws an `ESYNC` error, and a retry options object without one is treated as `0`.
+
 ### .unlockSync(file, [options])
 
 Sync version of `.unlock()`.   
@@ -167,7 +173,7 @@ Returns a boolean or throws on error.
 
 ## Graceful exit
 
-`proper-lockfile` automatically removes locks if the process exits, except if the process is killed with SIGKILL or it crashes due to a VM fatal error (e.g.: out of memory).
+`proper-lockfile` automatically removes locks if the process exits, except if the process is killed with SIGKILL or it crashes due to a VM fatal error (e.g.: out of memory). Lockfiles that someone else acquired after they went stale are left in place.
 
 
 ## Tests

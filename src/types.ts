@@ -49,6 +49,10 @@ export interface LockEntry {
     lockfilePath: string;
     file: string;
     mtime: Date;
+    // mtime being written by an update whose callback has not run yet
+    pendingMtime: Date | null;
+    // Release that waits for that update to finish
+    afterUpdate: (() => void) | null;
     mtimePrecision: string;
     options: ResolvedLockOptions;
     lastUpdate: number;

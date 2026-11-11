@@ -4,6 +4,7 @@ import retry from 'retry';
 import { onExit } from 'signal-exit';
 import assert from 'assert';
 import * as mtimePrecision from './mtime-precision';
+import { syncFs } from './adapter';
 import {
     LockFileFs,
     LockEntry,
@@ -104,21 +105,97 @@ function acquireLock(
                 );
             }
 
-            // If it's stale, remove it and try again!
-            // Skip stale check to avoid recursiveness
+            // If it's stale, take it over!
+            takeOverLock(file, options, callback);
+        });
+    });
+}
+
+// Removes a stale lock and acquires it. Two acquirers that judged the same lock stale must not both
+// do this, or the second removal deletes the lock the first one has just created: a guard directory
+// next to the lockfile lets only one of them take it over at a time.
+function takeOverLock(
+    file: string,
+    options: ResolvedLockOptions,
+    callback: (err: Error | null, mtime?: Date, mtimePrecision?: string) => void,
+): void {
+    const lockfilePath = getLockFile(file, options);
+    const guardPath = `${path.resolve(lockfilePath)}.takeover`;
+
+    acquireTakeoverGuard(guardPath, options, true, (err) => {
+        if (err) {
+            return callback(
+                err.code === 'EEXIST'
+                    ? Object.assign(new Error('Lock file is already being held'), { code: 'ELOCKED', file })
+                    : err,
+            );
+        }
+
+        const done = (err: Error | null, mtime?: Date, precision?: string) => {
+            options.fs.rmdir(guardPath, () => callback(err, mtime, precision));
+        };
+
+        // Skip stale check to avoid recursiveness
+        const acquire = () => acquireLock(file, { ...options, stale: 0 }, done);
+
+        // Check again now that we hold the guard, someone else may have taken it over meanwhile
+        options.fs.stat(lockfilePath, (err: any, stat: any) => {
+            if (err) {
+                return err.code === 'ENOENT' ? acquire() : done(err);
+            }
+
+            if (!isLockStale(stat, options)) {
+                return done(
+                    Object.assign(new Error('Lock file is already being held'), { code: 'ELOCKED', file }),
+                );
+            }
+
+            // The stat above and this rmdir are not atomic. If the holder releases in between and
+            // someone else acquires the lock right away, this removes their lock and both end up
+            // holding it until the mtime update of one of them reports ECOMPROMISED. Closing that
+            // gap would need an rmdir that checks which directory it removes.
             removeLock(file, options, (err) => {
                 if (err) {
-                    return callback(err);
+                    return done(err);
                 }
 
-                acquireLock(file, { ...options, stale: 0 }, callback);
+                acquire();
             });
+        });
+    });
+}
+
+function acquireTakeoverGuard(
+    guardPath: string,
+    options: ResolvedLockOptions,
+    removeIfStale: boolean,
+    callback: (err?: any) => void,
+): void {
+    options.fs.mkdir(guardPath, (err: any) => {
+        if (!err || err.code !== 'EEXIST' || !removeIfStale) {
+            return callback(err);
+        }
+
+        // Someone else is taking the lock over, unless the guard was left behind by a crashed process
+        options.fs.stat(guardPath, (statErr: any, stat: any) => {
+            if (statErr || !isLockStale(stat, options)) {
+                return callback(err);
+            }
+
+            options.fs.rmdir(guardPath, () => acquireTakeoverGuard(guardPath, options, false, callback));
         });
     });
 }
 
 function isLockStale(stat: { mtime: Date }, options: { stale: number }): boolean {
     return stat.mtime.getTime() < Date.now() - options.stale;
+}
+
+// Whether the lockfile still carries this lock's mtime, so nobody else took it over
+function isLockOurs(lock: LockEntry, stat: { mtime: Date }): boolean {
+    const mtime = stat.mtime.getTime();
+
+    return mtime === lock.mtime.getTime() || mtime === lock.pendingMtime?.getTime();
 }
 
 function removeLock(
@@ -136,12 +213,10 @@ function removeLock(
     });
 }
 
-function updateLock(file: string, options: ResolvedLockOptions): void {
-    if (typeof options.lockfilePath !== 'string') {
-        throw Error('Options is not defined ');
-    }
-    const lockKey = file + options.lockfilePath;
-    const lock = locks[lockKey];
+// Takes the entry itself rather than looking it up by key: a newer lock on the same file may
+// have replaced it in `locks` after it went stale
+function updateLock(file: string, lock: LockEntry): void {
+    const options = lock.options;
 
     // Just for safety, should never happen
     /* istanbul ignore if */
@@ -156,6 +231,11 @@ function updateLock(file: string, options: ResolvedLockOptions): void {
         // Stat the file to check if mtime is still ours
         // If it is, we can still recover from a system sleep or a busy event loop
         options.fs.stat(lock.lockfilePath, (err: any, stat: any) => {
+            // Ignore if the lock was released while the stat was in flight
+            if (lock.released) {
+                return;
+            }
+
             const isOverThreshold =
                 lock.lastUpdate + options.stale < Date.now();
 
@@ -172,7 +252,7 @@ function updateLock(file: string, options: ResolvedLockOptions): void {
 
                 lock.updateDelay = 1000;
 
-                return updateLock(file, options);
+                return updateLock(file, lock);
             }
 
             const isMtimeOurs = lock.mtime.getTime() === stat.mtime.getTime();
@@ -192,14 +272,18 @@ function updateLock(file: string, options: ResolvedLockOptions): void {
 
             const mtime = mtimePrecision.getMtime(lock.mtimePrecision);
 
+            lock.pendingMtime = mtime;
+
             options.fs.utimes(lock.lockfilePath, mtime, mtime, (err: any) => {
                 const isOverThreshold =
                     lock.lastUpdate + options.stale < Date.now();
 
-                // Ignore if the lock was released
+                // Ignore if the lock was released, but let a release that waited for this update go on
                 if (lock.released) {
-                    return;
+                    return lock.afterUpdate && lock.afterUpdate();
                 }
+
+                lock.pendingMtime = null;
 
                 // If it failed to update the lockfile, keep trying unless
                 // the lockfile was deleted or we are over the threshold
@@ -214,14 +298,14 @@ function updateLock(file: string, options: ResolvedLockOptions): void {
 
                     lock.updateDelay = 1000;
 
-                    return updateLock(file, options);
+                    return updateLock(file, lock);
                 }
 
                 // All ok, keep updating..
                 lock.mtime = mtime;
                 lock.lastUpdate = Date.now();
                 lock.updateDelay = null;
-                updateLock(file, options);
+                updateLock(file, lock);
             });
         });
     }, lock.updateDelay!);
@@ -324,6 +408,8 @@ export function lock(
                     lockfilePath: getLockFile(file, opts),
                     file,
                     mtime: mtime!,
+                    pendingMtime: null,
+                    afterUpdate: null,
                     mtimePrecision: precision!,
                     options: opts,
                     lastUpdate: Date.now(),
@@ -333,7 +419,7 @@ export function lock(
                 });
 
                 // We must keep the lock fresh to avoid staleness
-                updateLock(file, opts);
+                updateLock(file, lockEntry);
 
                 callback(null, (releasedCallback?: (err?: Error | null) => void) => {
                     if (lockEntry.released) {
@@ -343,6 +429,26 @@ export function lock(
                                 Object.assign(
                                     new Error('Lock is already released'),
                                     { code: 'ERELEASED' },
+                                ),
+                            )
+                        );
+                    }
+
+                    // This lock went stale and a newer lock on the same file replaced it,
+                    // so unlocking by key would release that one instead
+                    if (locks[lockKey] !== lockEntry) {
+                        if (lockEntry.updateTimeout) {
+                            clearTimeout(lockEntry.updateTimeout);
+                        }
+
+                        lockEntry.released = true;
+
+                        return (
+                            releasedCallback &&
+                            releasedCallback(
+                                Object.assign(
+                                    new Error('Lock was compromised by a newer lock on the same file'),
+                                    { code: 'ECOMPROMISED' },
                                 ),
                             )
                         );
@@ -396,7 +502,33 @@ export function unlock(
         lockEntry.released = true; // Signal the lock has been released
         delete locks[lockKey]; // Delete from locks
 
-        removeLock(file, opts, callback!);
+        // Only remove the lockfile if it is still ours: if it went stale and someone else
+        // acquired it, removing it would release their lock
+        const removeIfOurs = () => opts.fs.stat(getLockFile(file, opts), (err: any, stat: any) => {
+            if (err) {
+                // Nothing to remove if it is already gone
+                return err.code === 'ENOENT' ? callback!() : callback!(err);
+            }
+
+            if (!isLockOurs(lockEntry, stat)) {
+                return callback!(
+                    Object.assign(
+                        new Error('Lock was compromised, the lockfile was acquired by someone else'),
+                        { code: 'ECOMPROMISED' },
+                    ),
+                );
+            }
+
+            removeLock(file, opts, callback!);
+        });
+
+        // Let an mtime update in flight finish first, or it could land on whoever acquires the
+        // lockfile after we remove it. The sync api can't wait, so it goes on right away.
+        if (lockEntry.pendingMtime && !(opts.fs as any)[syncFs]) {
+            lockEntry.afterUpdate = removeIfOurs;
+        } else {
+            removeIfOurs();
+        }
     });
 }
 
@@ -450,7 +582,10 @@ export function getLocks(): Record<string, LockEntry> {
 onExit(() => {
     for (const entry of Object.values(locks)) {
         try {
-            entry.options.fs.rmdirSync!(entry.lockfilePath);
+            // Leave the lockfile alone if someone else acquired it after it went stale
+            if (isLockOurs(entry, entry.options.fs.statSync!(entry.lockfilePath))) {
+                entry.options.fs.rmdirSync!(entry.lockfilePath);
+            }
         } catch (e) {
             /* Empty */
         }
