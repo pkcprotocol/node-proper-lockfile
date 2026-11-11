@@ -115,7 +115,9 @@ it('should retry several times if retries were specified', async () => {
 
     const release = await lockfile.lock(`${tmpDir}/foo`, { lockfilePath: `${tmpDir}/foo.lock` });
 
-    setTimeout(release, 4000);
+    // Retries run about every second, so the attempt at ~4 s must not race the release itself:
+    // the lockfile is still there until the release has checked it is ours and removed it
+    setTimeout(release, 3500);
 
     await lockfile.lock(`${tmpDir}/foo`, { retries: { retries: 5, maxTimeout: 1000 }, lockfilePath: `${tmpDir}/foo.lock` });
 });
