@@ -150,6 +150,10 @@ function takeOverLock(
                 );
             }
 
+            // The stat above and this rmdir are not atomic. If the holder releases in between and
+            // someone else acquires the lock right away, this removes their lock and both end up
+            // holding it until the mtime update of one of them reports ECOMPROMISED. Closing that
+            // gap would need an rmdir that checks which directory it removes.
             removeLock(file, options, (err) => {
                 if (err) {
                     return done(err);
